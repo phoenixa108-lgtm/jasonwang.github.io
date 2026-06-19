@@ -1,0 +1,45 @@
+name: Temporary QQQ trend v2 walk-forward optimization
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip pandas numpy yfinance
+      - name: Download pinned real-data loader
+        run: curl -L --fail https://raw.githubusercontent.com/phoenixa108-lgtm/jasonwang.github.io/4782e8c336dd8a3ea57174650ca0a20b54729284/tmp_fvg_backtest.py -o tmp_fvg_engine.py
+      - name: Run walk-forward optimization
+        run: python tmp_qqq_trend_opt_v2.py
+      - name: Print result
+        if: always()
+        run: |
+          echo '--- result.json ---'
+          cat trend_opt_results/result.json || true
+          echo '--- top20_validation.csv ---'
+          cat trend_opt_results/top20_validation.csv || true
+          echo '--- cost_sensitivity.csv ---'
+          cat trend_opt_results/cost_sensitivity.csv || true
+          echo '--- risk_sizing.csv ---'
+          cat trend_opt_results/risk_sizing.csv || true
+      - name: Upload outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qqq-trend-v2-optimization-results
+          path: trend_opt_results/
+          if-no-files-found: warn
+          retention-days: 2
