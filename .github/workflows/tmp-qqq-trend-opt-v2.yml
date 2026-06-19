@@ -1,0 +1,65 @@
+name: Temporary QQQ trend v2 walk-forward optimization
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip pandas numpy yfinance
+      - name: Download pinned real-data loader
+        run: curl -L --fail https://raw.githubusercontent.com/phoenixa108-lgtm/jasonwang.github.io/4782e8c336dd8a3ea57174650ca0a20b54729284/tmp_fvg_backtest.py -o tmp_fvg_engine.py
+      - name: Apply runtime guards
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('tmp_qqq_trend_opt_v2.py')
+          s=p.read_text()
+          s=s.replace('pd.Timestamp.min.tz_localize(NY_TZ)', 'pd.Timestamp("1900-01-01", tz=NY_TZ)')
+          old='def score_training(t, fd):\n    train_folds=["E1","E2","E3","H_TRAIN"]'
+          new='def score_training(t, fd):\n    if t.empty:\n        return -999.0, 0, 0, np.array([-0.15, -0.15, -0.15, -0.15]), 0.0\n    train_folds=["E1","E2","E3","H_TRAIN"]'
+          s=s.replace(old,new)
+          p.write_text(s)
+          PY
+      - name: Run walk-forward optimization
+        run: |
+          mkdir -p trend_opt_results
+          set +e
+          python tmp_qqq_trend_opt_v2.py > trend_opt_results/run.log 2>&1
+          status=$?
+          cat trend_opt_results/run.log
+          exit $status
+      - name: Print result
+        if: always()
+        run: |
+          echo '--- run.log ---'
+          tail -200 trend_opt_results/run.log || true
+          echo '--- result.json ---'
+          cat trend_opt_results/result.json || true
+          echo '--- top20_validation.csv ---'
+          cat trend_opt_results/top20_validation.csv || true
+          echo '--- cost_sensitivity.csv ---'
+          cat trend_opt_results/cost_sensitivity.csv || true
+          echo '--- risk_sizing.csv ---'
+          cat trend_opt_results/risk_sizing.csv || true
+      - name: Upload outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qqq-trend-v2-optimization-results
+          path: trend_opt_results/
+          if-no-files-found: warn
+          retention-days: 2
