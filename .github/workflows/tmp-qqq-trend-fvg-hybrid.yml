@@ -1,0 +1,47 @@
+name: Temporary QQQ trend-filtered FVG hybrid backtest
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip pandas numpy yfinance
+      - name: Download pinned real-data loader
+        run: curl -L --fail https://raw.githubusercontent.com/phoenixa108-lgtm/jasonwang.github.io/4782e8c336dd8a3ea57174650ca0a20b54729284/tmp_fvg_backtest.py -o tmp_fvg_engine.py
+      - name: Run hybrid backtest
+        run: |
+          mkdir -p hybrid_results
+          set +e
+          python tmp_qqq_trend_fvg_hybrid.py > hybrid_results/run.log 2>&1
+          status=$?
+          cat hybrid_results/run.log
+          exit $status
+      - name: Print outputs
+        if: always()
+        run: |
+          tail -200 hybrid_results/run.log || true
+          cat hybrid_results/result.json || true
+          cat hybrid_results/variant_ranking.csv || true
+          cat hybrid_results/cost_sensitivity.csv || true
+      - name: Upload outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qqq-trend-fvg-hybrid-results
+          path: hybrid_results/
+          if-no-files-found: warn
+          retention-days: 2
