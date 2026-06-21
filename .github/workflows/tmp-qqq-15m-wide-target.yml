@@ -1,0 +1,103 @@
+name: Temporary QQQ 15m wider-target backtest
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip pandas numpy yfinance
+      - name: Download pinned QQQ data loader
+        run: curl -L --fail https://raw.githubusercontent.com/phoenixa108-lgtm/jasonwang.github.io/4782e8c336dd8a3ea57174650ca0a20b54729284/tmp_fvg_backtest.py -o tmp_fvg_engine.py
+      - name: Extract and patch 15m engine
+        run: |
+          curl -L --fail https://raw.githubusercontent.com/phoenixa108-lgtm/jasonwang.github.io/712f757e98691fa67b0993b01e68598ea27eceb9/.github/workflows/tmp-qqq-fvg-v5-15m.yml -o prev.yml
+          python - <<'PY'
+          from pathlib import Path
+          lines = Path('prev.yml').read_text().splitlines()
+          start = next(i for i, line in enumerate(lines) if "cat > tmp_qqq_fvg_v5_15m_backtest.py <<'PY'" in line) + 1
+          end = next(i for i in range(start, len(lines)) if lines[i].strip() == 'PY')
+          script_lines = []
+          for line in lines[start:end]:
+              if line.startswith('          '):
+                  script_lines.append(line[10:])
+              else:
+                  script_lines.append(line)
+          s = '\n'.join(script_lines)
+          s = s.replace('    use_impulse_or: bool = True\n    use_time_filter: bool = True', '    use_impulse_or: bool = True\n    use_time_filter: bool = True\n    target_mode: str = "prior_high"\n    target_atr_multiple: float = 0.0\n    target_r: float = 1.0')
+          old_variants = '''VARIANTS = [
+    Params("V5_15M_TIME_UPPER2"),
+    Params("V5_15M_NO_TIME_UPPER2", use_time_filter=False),
+    Params("V5_15M_TIME_UPPER1", upper_qty=1),
+]'''
+          new_variants = '''VARIANTS = [
+    Params("TP_PRIOR_HIGH"),
+    Params("TP_PLUS_0P25ATR", target_mode="prior_high_plus_atr", target_atr_multiple=0.25),
+    Params("TP_PLUS_0P5ATR", target_mode="prior_high_plus_atr", target_atr_multiple=0.50),
+    Params("TP_PLUS_1ATR", target_mode="prior_high_plus_atr", target_atr_multiple=1.00),
+    Params("TP_1P5R", target_mode="r_multiple", target_r=1.5),
+    Params("TP_2R", target_mode="r_multiple", target_r=2.0),
+]'''
+          s = s.replace(old_variants, new_variants)
+          s = s.replace('return {"lower": lower, "upper": upper, "score": score,', 'return {"lower": lower, "upper": upper, "signal_atr": atr_value, "score": score,')
+          marker = '''def weighted_avg(lots):
+    qty = sum(int(x["qty"]) for x in lots)
+    avg = sum(float(x["price"]) * int(x["qty"]) for x in lots) / qty
+    return avg, qty
+'''
+          addition = marker + '''
+
+def compute_target(setup: dict, p: Params, position: dict | None = None) -> float:
+    prior_high = float(setup["prior_high"])
+    if p.target_mode == "prior_high_plus_atr":
+        return prior_high + p.target_atr_multiple * float(setup.get("signal_atr", 0.0))
+    if p.target_mode == "r_multiple" and position is not None and position.get("lots"):
+        avg_entry, _ = weighted_avg(position["lots"])
+        risk = avg_entry - float(setup["stop"])
+        if risk > 0:
+            return avg_entry + p.target_r * risk
+    return prior_high
+'''
+          s = s.replace(marker, addition)
+          s = s.replace('setup["target"] = setup["prior_high"]', 'setup["target"] = compute_target(setup, p, position)')
+          s = s.replace('if position is not None: position["target"] = setup["target"]', 'if position is not None:\n                              setup["target"] = compute_target(setup, p, position)\n                              position["target"] = setup["target"]')
+          s = s.replace('                                  position["target"] = setup["target"]', '                                  setup["target"] = compute_target(setup, p, position)\n                                  position["target"] = setup["target"]')
+          s = s.replace('"target": best["prior_high"],', '"target": compute_target({**best, "stop": stop}, p),')
+          s = s.replace('out = Path(os.environ.get("OUTDIR", "fvg_v5_15m_results"))', 'out = Path(os.environ.get("OUTDIR", "fvg_15m_wide_target_results"))')
+          s = s.replace('"strategy": "QQQ FVG v5 on 15m bars"', '"strategy": "QQQ FVG 15m wider-target variants"')
+          Path('tmp_qqq_15m_wide_target.py').write_text(s)
+          PY
+      - name: Run 15m wider-target backtest
+        run: python tmp_qqq_15m_wide_target.py
+      - name: Print outputs
+        if: always()
+        run: |
+          echo '--- combined_metrics.csv ---'
+          cat fvg_15m_wide_target_results/combined_metrics.csv || true
+          echo '--- segment_metrics.csv ---'
+          cat fvg_15m_wide_target_results/segment_metrics.csv || true
+          echo '--- monte_carlo.csv ---'
+          cat fvg_15m_wide_target_results/monte_carlo.csv || true
+          echo '--- results.json ---'
+          cat fvg_15m_wide_target_results/results.json || true
+      - name: Upload outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qqq-15m-wide-target-results
+          path: fvg_15m_wide_target_results/
+          if-no-files-found: warn
+          retention-days: 2
